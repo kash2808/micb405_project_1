@@ -1,75 +1,111 @@
 #!/bin/bash
 
-# Create project_1, RawData folders and copy ref_genome.fasta and all fastq.gz files
-mkdir project_1
-mkdir project_1/RawData
-cp /projects/micb405/resources/project_1/ref_genome.fasta ~/project_1/RawData
-cp /projects/micb405/resources/project_1/*.fastq.gz ~/project_1/RawData
-cd project_1/RawData
-
-# Unzip fastq files
-gunzip *.fastq.gz
+# Create Project_1 folder, copy ref_genome.fasta to RawData folder
+mkdir Project_1
+mkdir ~/Project_1/RawData
+cp /projects/micb405/resources/Project_1/ref_genome.fasta ~/Project_1/RawData
 
 # Create ProcessedData, BWA_output, and ref_index folder
-mkdir ~/project_1/ProcessedData
-mkdir ~/project_1/ProcessedData/BWA_output
-mkdir ~/project_1/ProcessedData/BWA_output/ref_index
+mkdir ~/Project_1/ProcessedData
+mkdir ~/Project_1/ProcessedData/BWA_output
+mkdir ~/Project_1/ProcessedData/BWA_output/ref_index
 
 # Index reference genome and move reference files to ref_index folder
-bwa index ref_genome.fasta
-mv ref* ~/project_1/ProcessedData/BWA_output/ref_index
+echo "Generating index"
+bwa index ~/Project_1/RawData/ref_genome.fasta
+mv ref* ~/Project_1/ProcessedData/BWA_output/ref_index
 
-# ========================
-# === Alignment Steps ====
-# ========================
-clear
+# ==================================
+# ======== Alignment Steps =========
+# ==================================
+# Align each sequence to the reference genome index and create .bam files
 
-echo "Running BWA mem"
+for fastq in /projects/micb405/resources/Project_1/*_1.fastq.gz;
+do
+  prefix=$(basename $fastq | sed 's/_1.fastq.gz//g')
+  echo "Analyzing $prefix"
+  bwa mem -t 10 ~/Project_1/RawData/ref_genome.fasta \
+  /projects/micb405/resources/Project_1/$prefix\_1.fastq.gz /projects/micb405/resources/Project_1/$prefix\_2.fastq.gz | \
+  samtools view -b - >~/Project_1/ProcessedData/BAM/$prefix.bam
+done
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_1_1.fastq ~/project_1/RawData/Patient_1_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_1.sam 2>~/project_1/ProcessedData/BWA_output/Patient_1_log.txt 
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_2_1.fastq ~/project_1/RawData/Patient_2_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_2.sam 2>~/project_1/ProcessedData/BWA_output/Patient_2_log.txt
+# ==================================
+# ======= Variant Calling ==========
+# ==================================
+mkdir ~/Project_1/ProcessedData/BAM
+mkdir ~/Project_1/ProcessedData/VCF
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_3_1.fastq ~/project_1/RawData/Patient_3_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_3.sam 2>~/project_1/ProcessedData/BWA_output/Patient_3_log.txt
+for bam in ~/Project_1/ProcessedData/BAM/*bam;
+do
+	prefix=$(basename $bam | ’s/.bam//g’)
+	echo "Analyzing $prefix"
+	# Sorts bam file by alignment position
+	samtools sort ~/Project_1/ProcessedData/BAM/$prefix.bam \
+	1>~/Project_1/ProcessedData/BAM/$prefix.sorted.bam
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_4_1.fastq ~/project_1/RawData/Patient_4_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_4.sam 2>~/project_1/ProcessedData/BWA_output/Patient_4_log.txt
+	# Remove duplicates
+	samtools rmdup \
+	~/Project_1/ProcessedData/BAM/$prefix.sorted.bam \
+	~/Project_1/ProcessedData/BAM/$prefix.sorted.rmdup.bam
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_5_1.fastq ~/project_1/RawData/Patient_5_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_5.sam 2>~/project_1/ProcessedData/BWA_output/Patient_5_log.txt
+	# Index bam file
+	samtools index ~/Project_1/ProcessedData/BAM/$prefix.sorted.rmdup.bam
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_6_1.fastq ~/project_1/RawData/Patient_6_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_6.sam 2>~/project_1/ProcessedData/BWA_output/Patient_6_log.txt
+	# Variant calling
+	bcftools mpileup --fasta-ref ~/Project_1/RawData/ref_genome.fasta /
+	~/Project_1/ProcessedData/BAM/$prefix.sorted.rmdup.bam | bcftools call -mv - \
+	>~/Project_1/ProcessedData/VCF/$prefix.VS.raw.vcf
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_7_1.fastq ~/project_1/RawData/Patient_7_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_7.sam 2>~/project_1/ProcessedData/BWA_output/Patient_7_log.txt
+	# Variant Filtering
+	bcftools filter --exclude "QUAL < 200" /Project_1/ProcessedData/VCF/$prefix.VS.raw.vcf
+done 
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_8_1.fastq ~/project_1/RawData/Patient_8_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_8.sam 2>~/project_1/ProcessedData/BWA_output/Patient_8_log.txt
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_9_1.fastq ~/project_1/RawData/Patient_9_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_9.sam 2>~/project_1/ProcessedData/BWA_output/Patient_9_log.txt
+# ==================================
+# == Multiple Sequence Alignment ===
+# ==================================
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_10_1.fastq ~/project_1/RawData/Patient_10_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_10.sam 2>~/project_1/ProcessedData/BWA_output/Patient_10_log.txt
+mkdir ~/Project_1/ProcessedData/MFA
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_11_1.fastq ~/project_1/RawData/Patient_11_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_11.sam 2>~/project_1/ProcessedData/BWA_output/Patient_11_log.txt
+# Dr. Jennifer Gardy’s script to convert .vcf to .fasta files
+python /projects/micb405/resources/vcf_to_fasta_het.py -x ~/Project_1/ProcessedData/VCF/spooky.snps
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_12_1.fastq ~/project_1/RawData/Patient_12_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_12.sam 2>~/project_1/ProcessedData/BWA_output/Patient_12_log.txt
+# MSA with MUSCLE
+muscle -in ~/Project_1/ProcessedData/VCF/spooky.snps.fasta -out ~/Project_1/ProcessedData/MFA/spooky.snps_muscle.mfa
+ 
+# MSA with MAFFT
+mafft ~/Project_1/ProcessedData/VCF/spooky.snps.fasta > ~/Project_1/ProcessedData/MFA/spooky.snps_mafft.mfa
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_13_1.fastq ~/project_1/RawData/Patient_13_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_13.sam 2>~/project_1/ProcessedData/BWA_output/Patient_13_log.txt
+# Trimal for MUSCLE file
+trimal -automated1 \
+-in ~/Project_1/ProcessedData/MFA/spooky.snps_muscle.mfa \
+-out ~/Project_1/ProcessedData/MFA/spooky.snps_muscle.trimal.mfa
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_14_1.fastq ~/project_1/RawData/Patient_14_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_14.sam 2>~/project_1/ProcessedData/BWA_output/Patient_14_log.txt
+# Trimal for MAFFT File
+trimal -automated1 \
+-in ~/Project_1/ProcessedData/MFA/spooky.snps_mafft.mfa \
+-out ~/Project_1/ProcessedData/MFA/spooky.snps_mafft.trimal.mfa
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_15_1.fastq ~/project_1/RawData/Patient_15_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_15.sam 2>~/project_1/ProcessedData/BWA_output/Patient_15_log.txt
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Patient_16_1.fastq ~/project_1/RawData/Patient_16_2.fastq 1>~/project_1/ProcessedData/BWA_output/Patient_16.sam 2>~/project_1/ProcessedData/BWA_output/Patient_16_log.txt
+# ==================================
+# == Building phylogenetic trees ===
+# ==================================
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Bat_1.fastq ~/project_1/RawData/Bat_2.fastq 1>~/project_1/ProcessedData/BWA_output/Bat.sam 2>~/project_1/ProcessedData/BWA_output/Bat_log.txt
+# RAxML for maximum-likelihood for MUSCLE
+raxml-ng --all --msa ~/Project_1/ProcessedData/MFA/spooky.snps_muscle.mfa \
+--model LG+G2 --tree rand{100} --bs-trees 20 \
+--threads 12 --seed 12345
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Cat_1.fastq ~/project_1/RawData/Cat_2.fastq 1>~/project_1/ProcessedData/BWA_output/Cat.sam 2>~/project_1/ProcessedData/BWA_output/Cat_log.txt
+# FastTree for MUSCLE
+FastTree ~/Project_1/ProcessedData/MFA/spooky.snps_muscle.mfa \
+1>~/Project_1/ProcessedData/MFA/spooky.snps_muscle.nwk
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Guinea_pig_1.fastq ~/project_1/RawData/Guinea_pig_2.fastq 1>~/project_1/ProcessedData/BWA_output/Guinea_pig.sam 2>~/project_1/ProcessedData/BWA_output/Guinea_pig_log.txt
+# RAxML for maximum-likelihood for MAFFT
+raxml-ng --all --msa ~/Project_1/ProcessedData/MFA/spooky.snps_mafft.mfa \
+--model LG+G2 --tree rand{100} --bs-trees 20 \
+--threads 12 --seed 12345
 
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Rabid_raccoon_1_1.fastq ~/project_1/RawData/Rabid_raccoon_1_2.fastq 1>~/project_1/ProcessedData/BWA_output/Rabid_raccoon_1.sam 2>~/project_1/ProcessedData/BWA_output/Rabid_raccoon_1_log.txt
-
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Rabid_raccoon_2_1.fastq ~/project_1/RawData/Rabid_raccoon_2_2.fastq 1>~/project_1/ProcessedData/BWA_output/Rabid_raccoon_2.sam 2>~/project_1/ProcessedData/BWA_output/Rabid_raccoon_2_log.txt
-
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Rabid_raccoon_3_1.fastq ~/project_1/RawData/Rabid_raccoon_3_2.fastq 1>~/project_1/ProcessedData/BWA_output/Rabid_raccoon_3.sam 2>~/project_1/ProcessedData/BWA_output/Rabid_raccoon_3_log.txt
-
-bwa mem -10 ~/project_1/ProcessedData/BWA_output/ref_index ~/project_1/RawData/Rabid_raccoon_4_1.fastq ~/project_1/RawData/Rabid_raccoon_4_2.fastq 1>~/project_1/ProcessedData/BWA_output/Rabid_raccoon_4.sam 2>~/project_1/ProcessedData/BWA_output/Rabid_raccoon_4_log.txt
-
-echo "BWA mem completed"
+# FastTree for MAFFT
+FastTree ~/Project_1/ProcessedData/MFA/spooky.snps_mafft.mfa \
+1>~/Project_1/ProcessedData/MFA/spooky.snps_mafft.nwk
