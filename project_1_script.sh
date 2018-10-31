@@ -5,7 +5,7 @@ echo "##########################################################################
 echo “Running Zombie Tracker Pro  v1.0”
 echo “Group 6”
 echo "This program is for Research Purposes only"
-echo "NOT for Diagnostic Rules"
+echo "NOT for Diagnostic Use"
 echo "####################################################################################"
 echo "####################################################################################"
 wait
